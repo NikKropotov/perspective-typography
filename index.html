@@ -618,6 +618,22 @@ input[type="range"] {
           </div>
 
           <div class="block">
+            <div class="h">Настройки</div>
+            <div style="display: flex; gap: 10px">
+              <button id="savePreset" class="btn">Сохранить файл</button>
+              <button id="loadPreset" class="btn">Загрузить файл</button>
+            </div>
+            <input id="presetFile" type="file" accept=".json,application/json"
+              style="display: none" />
+            <div class="hint">
+              Все ползунки и тексты складываются в маленький файл .json.
+              Последнее состояние и так восстановится при следующем открытии —
+              файл нужен, чтобы держать несколько вариантов и передавать их
+              другим.
+            </div>
+          </div>
+
+          <div class="block">
             <button id="resetAll" class="btn">Сбросить всё</button>
           </div>
         </section>
@@ -1361,6 +1377,7 @@ window.ALS_HAUSS = {"regular":{"upm":1000,"ascent":980,"descent":-250,"capHeight
     board.innerHTML = svgMarkup(last, false);
     readout.textContent = Math.round(w) + " × " + Math.round(h) + " px  ·  " +
       last.paths.length + " контуров";
+    autosave();
   }
 
   window.addEventListener("resize", function () {
@@ -1368,6 +1385,46 @@ window.ALS_HAUSS = {"regular":{"upm":1000,"ascent":980,"descent":-250,"capHeight
     fitBoard(state.trim ? last.inkW + state.margin * 0.5 : state.canvasW,
              state.trim ? last.inkH + state.margin * 0.5 : state.canvasH);
   });
+
+  // ------------------------------------------------------------ настройки
+
+  /* Пресет — это просто снимок state. Применяем его по одному ключу и только
+     те, что есть в DEFAULTS и совпадают по типу: чужой или битый json не
+     сможет подсунуть мусор в вёрстку. */
+  var STORE_KEY = "perspektiva:last";
+
+  function applyPreset(data) {
+    if (!data || typeof data !== "object") return 0;
+    var src = data.settings && typeof data.settings === "object" ? data.settings : data;
+    var n = 0;
+    for (var k in DEFAULTS) {
+      if (!Object.prototype.hasOwnProperty.call(DEFAULTS, k)) continue;
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      var v = src[k];
+      if (typeof v !== typeof DEFAULTS[k]) continue;
+      if (typeof v === "number" && !isFinite(v)) continue;
+      state[k] = v;
+      n++;
+    }
+    return n;
+  }
+
+  /* Автосохранение последнего состояния. localStorage может быть недоступен
+     (приватное окно, запрет на сайт) — тогда просто живём без него. */
+  var autosaveTimer = null;
+  function autosave() {
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(function () {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+    }, 400);
+  }
+
+  function restoreAutosave() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (raw) applyPreset(JSON.parse(raw));
+    } catch (e) {}
+  }
 
   // ------------------------------------------------------------- экспорт
 
@@ -1404,6 +1461,39 @@ window.ALS_HAUSS = {"regular":{"upm":1000,"ascent":980,"descent":-250,"capHeight
     var base = (state.title + (state.useSub ? " " + state.sub : ""))
       .replace(/\s+/g, "-").replace(/[^\wА-Яа-яЁё-]/g, "").slice(0, 40);
     return base ? base.toLowerCase() : "perspective";
+  }
+
+  function exportPreset() {
+    var data = {
+      app: "perspektiva",
+      version: 1,
+      saved: new Date().toISOString(),
+      settings: state
+    };
+    download(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+             fileStem() + ".json");
+  }
+
+  function importPreset(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try {
+        data = JSON.parse(String(reader.result));
+      } catch (e) {
+        readout.textContent = "Это не файл настроек.";
+        return;
+      }
+      if (!applyPreset(data)) {
+        readout.textContent = "В файле нет знакомых настроек.";
+        return;
+      }
+      syncAll();
+      render();
+      readout.textContent = "Настройки загружены.";
+    };
+    reader.onerror = function () { readout.textContent = "Не удалось прочитать файл."; };
+    reader.readAsText(file);
   }
 
   function exportSVG() {
@@ -1591,6 +1681,14 @@ window.ALS_HAUSS = {"regular":{"upm":1000,"ascent":980,"descent":-250,"capHeight
     ["angle", "dist", "horizon", "edgeL", "edgeR", "roll", "arcAngle"].forEach(function (k) { state[k] = DEFAULTS[k]; });
     syncAll(); render();
   });
+  $("#savePreset").addEventListener("click", exportPreset);
+  $("#loadPreset").addEventListener("click", function () { $("#presetFile").click(); });
+  $("#presetFile").addEventListener("change", function (e) {
+    var f = e.target.files && e.target.files[0];
+    if (f) importPreset(f);
+    e.target.value = ""; // чтобы тот же файл можно было загрузить повторно
+  });
+
   $("#resetAll").addEventListener("click", function () {
     state = JSON.parse(JSON.stringify(DEFAULTS));
     syncAll(); render();
@@ -1598,8 +1696,9 @@ window.ALS_HAUSS = {"regular":{"upm":1000,"ascent":980,"descent":-250,"capHeight
 
   function syncAll() { syncers.forEach(function (f) { f(); }); }
 
-  window.__perspective = { build: build, svgMarkup: svgMarkup, state: state, render: render, layout: layout, glyph: glyph };
+  window.__perspective = { build: build, svgMarkup: svgMarkup, state: state, render: render, layout: layout, glyph: glyph, applyPreset: applyPreset };
 
+  restoreAutosave();
   syncAll();
   render();
 })();
